@@ -1,0 +1,66 @@
+#! /usr/bin/env wish
+
+package require Tcl 8.5
+package require Tk 8.5
+
+set ifnum 0
+set address {}
+set passphrase {}
+array set peers {}
+array set aips {}
+array set endpoints {}
+
+set gensym_index 0
+proc gensym {{base gensym}} { return "base[incr ::gensym_index]" }
+
+proc addpeer {w} {
+	set f [ttk::frame $w.[set peerid [gensym peer]]]
+
+	ttk::label $f.pubkeylabel -text "Public key:"
+	ttk::entry $f.pubkey -textvariable ::peers($peerid)
+
+	ttk::label $f.aiplabel -text "Allowed addresses:"
+	ttk::entry $f.aip -textvariable ::aips($peerid)
+
+	ttk::label $f.eplabel -text "Initial endpoint:"
+	ttk::entry $f.endpoint -textvariable ::endpoints($peerid)
+
+	ttk::button $f.remove -text "Remove peer" -command [list destroy $f]
+
+	grid $f.pubkeylabel $f.pubkey   -sticky ew
+	grid $f.aiplabel    $f.aip      -sticky ew
+	grid $f.eplabel     $f.endpoint -sticky ew
+	grid x              $f.remove   -sticky ew
+
+	grid columnconfigure $f 0 -weight 0
+	grid columnconfigure $f 1 -weight 1
+
+	grid $f -padx [tk scaling] -pady [tk scaling] -sticky ew
+	grid columnconfigure $w 0 -weight 1
+}
+
+ttk::frame .f
+
+ttk::label .f.iflabel -text "Interface #:"
+ttk::spinbox .f.ifnum -from 0 -to 99 -increment 1 -textvariable ::ifnum
+
+ttk::label .f.addrlabel -text "Address:"
+ttk::entry .f.addrentry -textvariable ::address
+
+ttk::label .f.pplabel -text "Passphrase:"
+ttk::entry .f.ppentry -textvariable ::passphrase -show *
+
+ttk::frame .f.peers -relief groove
+
+[ttk::button .f.addpeer -text "Add peer" -command { addpeer .f.peers }] invoke
+
+grid .f.iflabel   .f.ifnum     -sticky ew
+grid .f.addrlabel .f.addrentry -sticky ew
+grid .f.pplabel   .f.ppentry   -sticky ew
+grid .f.peers     -            -sticky nsew -padx [expr {[tk scaling] * 4}]
+grid x            .f.addpeer   -sticky e
+
+grid columnconfigure .f 0 -weight 0
+grid columnconfigure .f 1 -weight 1
+
+pack .f -expand yes -fill both
