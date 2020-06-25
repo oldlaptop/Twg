@@ -3,6 +3,8 @@
 package require Tcl 8.6 ;# try(n)
 package require Tk 8.5  ;# ttk
 
+package require bcrypt_pbkdf 0.1
+
 # predicates (-p) generally have traces on them to disable/enable some widget(s)
 set ifnum 0
 set address {}
@@ -19,10 +21,32 @@ array set ports {}
 array set psks {}
 array set pskp {}
 
-# should return a base64-encoded wireguard private key (and doesn't, in case
-# that's not perfectly obvious)
+# This should be seen as a lousy sort of insurance, making it at least possible
+# that brute-forcing a less than stellar password will not be cheaper than just
+# brute-forcing the 32-octet key. This value takes a bit over one second on my
+# Thinkpad X61 (Core 2 Duo T7300), as opposed to not quite thirteen microseconds
+# to generate a random base64 string from tcl with
+# `binary encode base64 [arc4random::arc4random bytes 32]`.
+set BCRYPT_PBKDF_ROUNDS 100
+
+# Should return a base64-encoded wireguard private key.
 proc genkey {} {
-	return NoTiMpLeMeNtEd=
+	# DANGER: This is not really what bcrypt_pbkdf is meant for. I don't know
+	# why this is wrong, or if it is for sure, but it probably is.
+	# At the very least, this risks generating a crappy key if the user provides
+	# a crappy passphrase.
+
+	# This is probably a bad plan too, but as far as I can understand the
+	# concept of a salt is not useful here, because we're not trying to hide a
+	# secret, the hash we're generating *is* a secret. bcrypt_pbkdf sensibly
+	# (but unhelpfully if you want to be stupid) refuses to cooperate if you
+	# give it an empty salt, so we simply declare half our passphrase to be a
+	# "salt".
+	set half [expr {entier([string length $::passphrase] / 2)}]
+	set notsalt [string range $::passphrase $half end]
+	set pass [string range $::passphrase 0 $half-1]
+
+	return [binary encode base64 [bcrypt_pbkdf $pass $notsalt 32 $::BCRYPT_PBKDF_ROUNDS]]
 }
 
 proc ifconfig {args} {

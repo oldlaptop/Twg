@@ -1,0 +1,29 @@
+.POSIX:
+
+PREFIX = /usr/local
+BIN = $(PREFIX)/bin
+LIB = $(PREFIX)/lib/tcl
+
+CPPFLAGS = @TCL_INCLUDE_SPEC@
+LDFLAGS = -lutil @TCL_LIB_SPEC@
+CFLAGS = @TCL_SHLIB_CFLAGS@
+TCL_SHLIB_LD  = @TCL_SHLIB_LD@
+
+default: tcl-bcrypt_pbkdf.so
+
+clean:
+	rm -f *.o *.so
+cleanall: clean
+	rm -f Makefile
+
+install: tcl-bcrypt_pbkdf.so
+	mkdir -p $(BIN)
+	mkdir -p $(LIB)/bcrypt_pbkdf
+	cp -p twg $(BIN)
+	cp -p tcl-bcrypt_pbkdf.so  $(LIB)/bcrypt_pbkdf
+	printf '%s\n' \
+		'package ifneeded bcrypt_pbkdf 0.1 [list load [set dir]/tcl-bcrypt_pbkdf[info sharedlibextension] Bpbkdf]' \
+		> $(LIB)/bcrypt_pbkdf/pkgIndex.tcl
+
+tcl-bcrypt_pbkdf.so: tcl-bcrypt_pbkdf.o
+	$(TCL_SHLIB_LD) $(LDFLAGS) tcl-bcrypt_pbkdf.o -o $@

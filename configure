@@ -1,0 +1,10 @@
+#! /bin/sh
+
+. ${TCL_CONFIG_SH:-/usr/local/lib/tcl/tcl8.6/tclConfig.sh}
+<Makefile.in sed "
+{
+	s|@TCL_INCLUDE_SPEC@|$TCL_INCLUDE_SPEC|
+	s|@TCL_LIB_SPEC@|$TCL_LIB_SPEC|
+	s|@TCL_SHLIB_CFLAGS@|$TCL_SHLIB_CFLAGS|
+	s|@TCL_SHLIB_LD@|$TCL_SHLIB_LD|
+}" > Makefile
