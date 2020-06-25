@@ -1,7 +1,7 @@
 #! /usr/bin/env wish
 
-package require Tcl 8.6
-package require Tk 8.5
+package require Tcl 8.6 ;# try(n)
+package require Tk 8.5  ;# ttk
 
 # predicates (-p) generally have traces on them to disable/enable some widget(s)
 set ifnum 0
@@ -19,6 +19,8 @@ array set ports {}
 array set psks {}
 array set pskp {}
 
+# should return a base64-encoded wireguard private key (and doesn't, in case
+# that's not perfectly obvious)
 proc genkey {} {
 	return NoTiMpLeMeNtEd=
 }
@@ -27,6 +29,7 @@ proc ifconfig {args} {
 	exec doas /sbin/ifconfig {*}$args
 }
 
+# create and configure the interface
 proc up {} {
 	set if wg$::ifnum
 
@@ -52,13 +55,23 @@ proc up {} {
 	}
 }
 
+# destroy... well, read it, okay?
 proc down {} {
 	ifconfig wg$::ifnum destroy
 }
 
+# generate a unique ad-hoc symbol for something (in particular this is
+# responsible for generating the indices into the parallel arrays that represent
+# wireguard peers)
 set gensym_index 0
 proc gensym {{base gensym}} { return "$base[incr ::gensym_index]" }
 
+# generate a ttk::separator, nice for use inline in a layout manager invocation
+proc mksep {b {o horizontal}} {
+	return [ttk::separator $b.[gensym mksep] -orient $o]
+}
+
+# add a new peer's worth of widgets under the frame $w
 proc addpeer {w} {
 	set f [ttk::frame $w.[set peerid [gensym peer]]]
 
@@ -68,6 +81,7 @@ proc addpeer {w} {
 	ttk::label $f.aiplabel -text "Allowed addresses:"
 	ttk::entry $f.aip -textvariable ::aips($peerid)
 
+	# optional block for the endpoint
 	ttk::checkbutton $f.epp -text "Initial endpoint:" -variable ::epp($peerid)
 	ttk::frame $f.ep -relief raised
 	ttk::label $f.ep.addrlab -text "Address:"
@@ -81,6 +95,7 @@ proc addpeer {w} {
 
 	set ::epp($peerid) 0
 
+	# optional block for the PSK
 	ttk::frame $f.psk
 	ttk::label $f.psklab -text "PSK:"
 	ttk::entry $f.psk.en -textvariable ::psks($peerid)
@@ -115,10 +130,6 @@ proc addpeer {w} {
 	return $f
 }
 
-proc mksep {b {o horizontal}} {
-	return [ttk::separator $b.[gensym mksep] -orient $o]
-}
-
 ttk::frame .f
 
 ttk::label .f.iflabel -text "Interface #:"
@@ -127,9 +138,11 @@ ttk::spinbox .f.ifnum -from 0 -to 99 -increment 1 -textvariable ::ifnum
 ttk::label .f.addrlabel -text "Address:"
 ttk::entry .f.addrentry -textvariable ::address
 
+# the vague and ominous plan is to feed this to bcrypt_pbkdf or so
 ttk::label .f.pplabel -text "Passphrase:"
 ttk::entry .f.ppentry -textvariable ::passphrase -show *
 
+# optional block for the wireguard UDP port
 ttk::labelframe .f.port -text "Port:"
 ttk::radiobutton .f.port.auto -text "Choose automatically" \
 	-variable ::portp -value no
@@ -167,12 +180,13 @@ grid .f.up        .f.down
 grid configure .f.up   -sticky w
 grid configure .f.down -sticky e
 
-
 grid columnconfigure .f 0 -weight 0
 grid columnconfigure .f 1 -weight 1
 
 pack .f -expand yes -fill both
 
+# trace to enable/disable some widget based on the value assigned to a
+# predicate; [string map] :w to something appropriate
 set pwidget {apply {{var index op} {
 	if {[array exists $var]} {
 		set acc [set var]($index)
@@ -188,6 +202,7 @@ set pwidget {apply {{var index op} {
 }}}
 
 trace add variable ::portp write [string map {:w .f.port.en} $pwidget]
+# note that $index will resolve in the pwidget lambda's scope
 trace add variable ::epp   write [string map {:w .f.peers.$index.ep.addr} $pwidget]
 trace add variable ::epp   write [string map {:w .f.peers.$index.ep.port} $pwidget]
 trace add variable ::pskp  write [string map {:w .f.peers.$index.psk.en} $pwidget]
