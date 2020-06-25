@@ -1,17 +1,63 @@
 #! /usr/bin/env wish
 
-package require Tcl 8.5
+package require Tcl 8.6
 package require Tk 8.5
 
+# predicates (-p) generally have traces on them to disable/enable some widget(s)
 set ifnum 0
 set address {}
 set passphrase {}
+set portp {} ;# authoritative value after UI definition
+set port {}
+
+# parallel with one element for each peer
 array set peers {}
 array set aips {}
+array set epp {}
 array set endpoints {}
+array set ports {}
+array set psks {}
+array set pskp {}
+
+proc genkey {} {
+	return NoTiMpLeMeNtEd=
+}
+
+proc ifconfig {args} {
+	exec doas /sbin/ifconfig {*}$args
+}
+
+proc up {} {
+	set if wg$::ifnum
+
+	ifconfig $if create
+	ifconfig $if $::address
+	ifconfig $if wgkey [genkey]
+
+	if {$::portp} {
+		ifconfig $if wgport $::port
+	}
+
+	foreach peerid [array names ::peers] {
+		ifconfig $if wgpeer $::peers($peerid) wgaip $::aips($peerid)
+
+		if {$::epp($peerid)} {
+			ifconfig $if wgpeer $::peers($peerid) wgendpoint \
+				$::endpoints($peerid) $::ports($peerid)
+		}
+
+		if {$::pskp($peerid)} {
+			ifconfig $if wgpeer $::peers($peerid) wgpsk $::psks($peerid)
+		}
+	}
+}
+
+proc down {} {
+	ifconfig wg$::ifnum destroy
+}
 
 set gensym_index 0
-proc gensym {{base gensym}} { return "base[incr ::gensym_index]" }
+proc gensym {{base gensym}} { return "$base[incr ::gensym_index]" }
 
 proc addpeer {w} {
 	set f [ttk::frame $w.[set peerid [gensym peer]]]
@@ -22,21 +68,55 @@ proc addpeer {w} {
 	ttk::label $f.aiplabel -text "Allowed addresses:"
 	ttk::entry $f.aip -textvariable ::aips($peerid)
 
-	ttk::label $f.eplabel -text "Initial endpoint:"
-	ttk::entry $f.endpoint -textvariable ::endpoints($peerid)
+	ttk::checkbutton $f.epp -text "Initial endpoint:" -variable ::epp($peerid)
+	ttk::frame $f.ep -relief raised
+	ttk::label $f.ep.addrlab -text "Address:"
+	ttk::entry $f.ep.addr -textvariable ::endpoints($peerid)
+	ttk::label $f.ep.portlab -text "Port:"
+	ttk::spinbox $f.ep.port -from 0 -to 65535 -increment 1 \
+		-textvariable ::ports($peerid)
+	grid $f.ep.addrlab $f.ep.addr -sticky ew
+	grid $f.ep.portlab $f.ep.port -sticky ew
+	grid columnconfigure $f.ep 1 -weight 1
 
-	ttk::button $f.remove -text "Remove peer" -command [list destroy $f]
+	set ::epp($peerid) 0
+
+	ttk::frame $f.psk
+	ttk::label $f.psklab -text "PSK:"
+	ttk::entry $f.psk.en -textvariable ::psks($peerid)
+	ttk::checkbutton $f.psk.p -text "Enabled?" -variable ::pskp($peerid)
+	grid $f.psk.p $f.psk.en -sticky ew
+	grid columnconfigure $f.psk 1 -weight 1
+
+	set ::pskp($peerid) 0
+
+	ttk::button $f.remove -text "Remove peer" -command [list apply { {f id} {
+		destroy $f
+		array unset peers $id
+		array unset ports $id
+		array unset aips $id
+		array unset epp $id
+		array unset endpoints $id
+	}} $f $peerid]
 
 	grid $f.pubkeylabel $f.pubkey   -sticky ew
 	grid $f.aiplabel    $f.aip      -sticky ew
-	grid $f.eplabel     $f.endpoint -sticky ew
-	grid x              $f.remove   -sticky ew
+	grid $f.epp         x           -sticky ew
+	grid $f.ep          -           -sticky nsew
+	grid $f.psklab      $f.psk      -sticky ew
+	grid x              $f.remove   -sticky e
 
 	grid columnconfigure $f 0 -weight 0
 	grid columnconfigure $f 1 -weight 1
 
 	grid $f -padx [tk scaling] -pady [tk scaling] -sticky ew
 	grid columnconfigure $w 0 -weight 1
+
+	return $f
+}
+
+proc mksep {b {o horizontal}} {
+	return [ttk::separator $b.[gensym mksep] -orient $o]
 }
 
 ttk::frame .f
@@ -50,17 +130,68 @@ ttk::entry .f.addrentry -textvariable ::address
 ttk::label .f.pplabel -text "Passphrase:"
 ttk::entry .f.ppentry -textvariable ::passphrase -show *
 
+ttk::labelframe .f.port -text "Port:"
+ttk::radiobutton .f.port.auto -text "Choose automatically" \
+	-variable ::portp -value no
+ttk::radiobutton .f.port.manual -text "Manual:" \
+	-variable ::portp -value yes
+ttk::entry .f.port.en -textvariable ::port
+grid .f.port.auto    -         -sticky ew
+grid .f.port.manual .f.port.en -sticky ew
+grid columnconfigure .f.port 1 -weight 1
+
 ttk::frame .f.peers -relief groove
 
-[ttk::button .f.addpeer -text "Add peer" -command { addpeer .f.peers }] invoke
+ttk::button .f.addpeer -text "Add peer" -command { addpeer .f.peers }
+
+ttk::button .f.up -text "Bring up" -command {
+	try {
+		up
+	} on error {err opts} {
+		# don't leave an interface half-configured
+		down
+		return -options $opts $err
+	}
+}
+ttk::button .f.down -text "Tear down" -command down
 
 grid .f.iflabel   .f.ifnum     -sticky ew
 grid .f.addrlabel .f.addrentry -sticky ew
 grid .f.pplabel   .f.ppentry   -sticky ew
+grid .f.port      -            -sticky nsew
 grid .f.peers     -            -sticky nsew -padx [expr {[tk scaling] * 4}]
 grid x            .f.addpeer   -sticky e
+grid [mksep .f]   -            -sticky ew -pady [tk scaling]
+grid .f.up        .f.down
+
+grid configure .f.up   -sticky w
+grid configure .f.down -sticky e
+
 
 grid columnconfigure .f 0 -weight 0
 grid columnconfigure .f 1 -weight 1
 
 pack .f -expand yes -fill both
+
+set pwidget {apply {{var index op} {
+	if {[array exists $var]} {
+		set acc [set var]($index)
+	} else {
+		set acc $var
+	}
+
+	if {[set $acc]} {
+		:w state !disabled
+	} else {
+		:w state disabled
+	}
+}}}
+
+trace add variable ::portp write [string map {:w .f.port.en} $pwidget]
+trace add variable ::epp   write [string map {:w .f.peers.$index.ep.addr} $pwidget]
+trace add variable ::epp   write [string map {:w .f.peers.$index.ep.port} $pwidget]
+trace add variable ::pskp  write [string map {:w .f.peers.$index.psk.en} $pwidget]
+# reset to trick the trace into firing
+set ::portp no
+
+.f.addpeer invoke
