@@ -11,6 +11,7 @@ set address {}
 set passphrase {}
 set portp {} ;# authoritative value after UI definition
 set port {}
+set writekey 0
 
 # parallel with one element for each peer
 array set peers {}
@@ -53,35 +54,133 @@ proc ifconfig {args} {
 	exec doas /sbin/ifconfig {*}$args
 }
 
-# create and configure the interface
-proc up {} {
-	set if wg$::ifnum
-
-	ifconfig $if create
-	ifconfig $if $::address
-	ifconfig $if wgkey [genkey]
+# apply interface configuration: the command prefix $cmd will be executed with
+# valid ifconfig args appended to it. the idea is that one caller might say
+# `config [list ifconfig wg$::ifnum]` and another might say
+# `config [list apply {{fd args} { puts $fd $args }} $fd]` or so.
+#
+# Note that the wgkey is not configured, because we don't always want to write
+# that out.
+proc config {cmd} {
+	{*}$cmd $::address
 
 	if {$::portp} {
-		ifconfig $if wgport $::port
+		{*}$cmd wgport $::port
 	}
 
 	foreach peerid [array names ::peers] {
-		ifconfig $if wgpeer $::peers($peerid) wgaip $::aips($peerid)
+		{*}$cmd wgpeer $::peers($peerid) wgaip $::aips($peerid)
 
 		if {$::epp($peerid)} {
-			ifconfig $if wgpeer $::peers($peerid) wgendpoint \
+			{*}$cmd wgpeer $::peers($peerid) wgendpoint \
 				$::endpoints($peerid) $::ports($peerid)
 		}
 
 		if {$::pskp($peerid)} {
-			ifconfig $if wgpeer $::peers($peerid) wgpsk $::psks($peerid)
+			{*}$cmd wgpeer $::peers($peerid) wgpsk $::psks($peerid)
 		}
 	}
+}
+
+# create and configure the interface
+proc up {} {
+	ifconfig wg$::ifnum wgkey [genkey]
+	config [list ifconfig wg$::ifnum]
 }
 
 # destroy... well, read it, okay?
 proc down {} {
 	ifconfig wg$::ifnum destroy
+}
+
+# Gimmicky control structure to automatically open/close a file.
+proc with {openargs in var body} {
+	upvar $var fd
+	if {$in ne "in"} {
+		error "incorrect usage, should be with /path/ in /var/ /body/"
+	}
+
+	try {
+		set fd [open {*}[uplevel 1 [list subst $openargs]]]
+		uplevel 1 $body
+	} finally {
+		close $fd
+	}
+}
+
+# Dump the configuration to a hostname.if(5) file
+proc emit {path} {
+	with {$path w} in fd {
+		if {$::writekey} {
+			puts $fd "wgkey [genkey]"
+		}
+		config [list apply { {fd args} {
+			puts $fd $args
+		}} $fd]
+	}
+}
+
+# Retrieve a configuration from a hostname.if(5) file.
+# The format accepted by this "parser" is implicitly the one emitted by the emit
+# proc, not the full hostname.if(5) syntax as implemented by netstart(8) and
+# ifconfig(8). Some effort has been made to accept handwritten files, but they
+# should not be expected to round-trip.
+proc inhale {path} {
+	set config {}
+
+	foreach victim [winfo children .f.peers] {
+		destroy $victim
+	}
+
+	with {$path r} in fd {
+		set config [split [read $fd]]
+	}
+
+	set n [llength $config]
+	set wgpeer nil
+	set peerid nil
+	for {set index 0} {$index < $n} {incr index} {
+		switch -regexp -- [lindex $config $index] {
+			(([0-9]{1,3}\.){3}[0-9]{1,3})|((([a-fA-F0-9]|(:?)){0,4}:){2,7}[a-fA-F0-9]{1,4}) {
+				# Looks like an IP address.
+				set ::address [lindex $config $index]
+			}
+			(wgport) {
+				set ::port [lindex $config [incr index]]
+			}
+			(wgpeer) {
+				if {[lindex $config [incr index]] ne $wgpeer} {
+					set wgpeer [lindex $config $index]
+					set ::peers([set peerid [gensym filepeer]]) $wgpeer
+					addpeer .f.peers $peerid
+				}
+			}
+			(wgaip) {
+				if {$wgpeer eq "nil"} {
+					error "configuration file is not valid (wgaip before wgpeer)"
+				}
+				set ::aips($peerid) [lindex $config [incr index]]
+			}
+			(wgendpoint) {
+				if {$wgpeer eq "nil"} {
+					error "configuration file is not valid (wgendpoint before wgpeer)"
+				}
+				set ::endpoints($peerid) [lindex $config [incr index]]
+				set ::ports($peerid) [lindex $config [incr index]]
+				set ::epp($peerid) true
+			}
+			(wgpsk) {
+				if {$wgpeer eq "nil"} {
+					error "configuration file is not valid (wgpsk before wgpeer)"
+				}
+				set ::psks($peerid) [lindex $config [incr index]]
+				set ::pskp($peerid) true
+			}
+			default {
+				# Gleefully ignore anything we don't understand.
+			}
+		}
+	}
 }
 
 # generate a unique ad-hoc symbol for something (in particular this is
@@ -95,9 +194,10 @@ proc mksep {b {o horizontal}} {
 	return [ttk::separator $b.[gensym mksep] -orient $o]
 }
 
-# add a new peer's worth of widgets under the frame $w
-proc addpeer {w} {
-	set f [ttk::frame $w.[set peerid [gensym peer]]]
+# add a new peer's worth of widgets under the frame $w, using the id $id if
+# specified
+proc addpeer {w {id nil}} {
+	set f [ttk::frame $w.[set peerid [expr {$id eq "nil" ? [gensym peer] : $id}]]]
 
 	ttk::label $f.pubkeylabel -text "Public key:"
 	ttk::entry $f.pubkey -textvariable ::peers($peerid)
@@ -154,6 +254,9 @@ proc addpeer {w} {
 	return $f
 }
 
+tk appname Twg
+wm title . "WireGuard configuration"
+
 ttk::frame .f
 
 ttk::label .f.iflabel -text "Interface #:"
@@ -162,7 +265,9 @@ ttk::spinbox .f.ifnum -from 0 -to 99 -increment 1 -textvariable ::ifnum
 ttk::label .f.addrlabel -text "Address:"
 ttk::entry .f.addrentry -textvariable ::address
 
-# the vague and ominous plan is to feed this to bcrypt_pbkdf or so
+ttk::checkbutton .f.writekey -text "Write private key to configuration file?" \
+	-variable writekey
+
 ttk::label .f.pplabel -text "Passphrase:"
 ttk::entry .f.ppentry -textvariable ::passphrase -show *
 
@@ -181,7 +286,9 @@ ttk::labelframe .f.peers -text "Peers:"
 
 ttk::button .f.addpeer -text "Add peer" -command { addpeer .f.peers }
 
-ttk::button .f.up -text "Bring up" -command {
+ttk::frame .f.buttons
+
+ttk::button .f.buttons.up -text "Bring up" -command {
 	try {
 		up
 	} on error {err opts} {
@@ -190,19 +297,32 @@ ttk::button .f.up -text "Bring up" -command {
 		return -options $opts $err
 	}
 }
-ttk::button .f.down -text "Tear down" -command down
+
+ttk::button .f.buttons.emit -text "Save hostname.if(5)" -command {
+	if {[set path [tk_getSaveFile -initialfile hostname.wg$::ifnum]] ne ""} {
+		emit $path
+	}
+}
+
+ttk::button .f.buttons.inhale -text "Load hostname.if(5)" -command {
+	if {[set path [tk_getOpenFile -initialdir /etc -initialfile hostname.wg$::ifnum]] ne ""} {
+		inhale $path
+	}
+}
+
+ttk::button .f.buttons.down -text "Tear down" -command down
+
+grid .f.buttons.up .f.buttons.emit .f.buttons.inhale .f.buttons.down -padx 2
 
 grid .f.iflabel   .f.ifnum     -sticky ew
 grid .f.addrlabel .f.addrentry -sticky ew
+grid .f.writekey  x            -sticky w
 grid .f.pplabel   .f.ppentry   -sticky ew
 grid .f.port      -            -sticky nsew
 grid .f.peers     -            -sticky nsew -padx [expr {[tk scaling] * 4}]
 grid x            .f.addpeer   -sticky e
 grid [mksep .f]   -            -sticky ew -pady [tk scaling]
-grid .f.up        .f.down
-
-grid configure .f.up   -sticky w
-grid configure .f.down -sticky e
+grid .f.buttons   -            -sticky ew
 
 grid columnconfigure .f 0 -weight 0
 grid columnconfigure .f 1 -weight 1
