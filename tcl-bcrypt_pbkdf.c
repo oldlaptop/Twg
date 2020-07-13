@@ -41,9 +41,11 @@ int tcl_bcrypt_pbkdf(ClientData clientData, Tcl_Interp *interp,
 		|| key_len_raw < 1)
 	{
 		Tcl_Obj *tmp = Tcl_NewWideIntObj(LLONG_MAX);
+		Tcl_IncrRefCount(tmp);
 		Tcl_SetObjResult(interp, Tcl_Format(interp,
 		                                    "bad keylen: should be between 0 and %d",
 		                                    1, &tmp));
+		Tcl_DecrRefCount(tmp);
 		return TCL_ERROR;
 	} else
 	{
@@ -54,9 +56,11 @@ int tcl_bcrypt_pbkdf(ClientData clientData, Tcl_Interp *interp,
 		|| rounds_raw < 1 || rounds_raw > UINT_MAX)
 	{
 		Tcl_Obj *tmp = Tcl_NewWideIntObj(UINT_MAX);
+		Tcl_IncrRefCount(tmp);
 		Tcl_SetObjResult(interp, Tcl_Format(interp,
 		                                    "bad # rounds: should be between 0 and %d",
 		                                    1, &tmp));
+		Tcl_DecrRefCount(tmp);
 		return TCL_ERROR;
 	} else
 	{
